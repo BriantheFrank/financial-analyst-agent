@@ -13,6 +13,22 @@ source .venv/bin/activate
 pip install requests lxml jsonschema pandas numpy matplotlib plotly kaleido streamlit pytest
 ```
 
+## One-click Windows launch
+
+1. Download this repository as a ZIP from GitHub and unzip it.
+2. Open the extracted folder and double-click `Run-Agent.cmd`.
+3. On first run, the launcher will:
+   - create `.venv`,
+   - install dependencies,
+   - prompt for `SEC_USER_AGENT` and save it to `.env`.
+4. The Streamlit app launches at: <http://localhost:8501>
+
+### Troubleshooting (Windows launcher)
+
+- **Python not installed**: install Python 3 from <https://www.python.org/downloads/windows/> and re-run `Run-Agent.cmd`.
+- **Port 8501 already in use**: run `Run-Agent.cmd --port 8502`.
+- **Force dependency refresh**: run `Run-Agent.cmd --reinstall`.
+
 ## Generate extractor JSON
 
 ```bash
@@ -69,3 +85,12 @@ If required data is unavailable, the chart is marked with "Data unavailable" and
 ```bash
 pytest -q
 ```
+
+Tests validate:
+- deterministic chart ordering,
+- expected file creation,
+- graceful handling of missing segment datasets.
+
+## Troubleshooting
+
+- If you see `UnicodeDecodeError` mentioning byte `0x8b`, clear `.cache/sec` and ensure you're on the latest version. The SEC client now auto-decompresses `gzip`/`deflate` responses (including older cached gzip payloads).
