@@ -1,15 +1,16 @@
 # SEC EDGAR Financial Extractor + Sell-Side Visualization Report
 
 This repository includes:
-1. The SEC EDGAR financial extractor (`sec_financials.py`, `cli.py`), and
-2. A publication-style report generator (`report.py`, `viz/`) that turns extractor JSON into chart packs.
+1. The SEC EDGAR financial extractor (`sec_financials.py`, `cli.py`),
+2. A publication-style report generator (`report.py`, `viz/`) that turns extractor JSON into chart packs, and
+3. A local Streamlit UI (`app.py`) for interactive demo/screen-sharing workflows.
 
 ## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install requests lxml jsonschema pandas numpy matplotlib plotly kaleido pytest
+pip install requests lxml jsonschema pandas numpy matplotlib plotly kaleido streamlit pytest
 ```
 
 ## One-click Windows launch
@@ -43,9 +44,28 @@ python report.py --in out.json --outdir reports/AAPL --format png html
 
 `--format` accepts one or both of: `png` `html`.
 
+## Run the UI (local only)
+
+```bash
+export SEC_USER_AGENT="Your Name your.email@example.com"
+streamlit run app.py
+```
+
+Windows PowerShell one-click launcher:
+
+```powershell
+./run_app.ps1
+```
+
+The UI includes:
+- sidebar controls for company/years/cache preference,
+- interactive Plotly charts (hover/zoom/legend),
+- data coverage + accession details,
+- downloads for extractor JSON and a report ZIP pack (HTML + PNG + JSON + summary).
+
 ## Output chart set
 
-The CLI deterministically attempts the following chart sequence:
+The pipeline deterministically attempts the following chart sequence:
 
 - `01_kpi_dashboard.(png|html)`
 - `02_revenue_trend.(png|html)`
@@ -58,14 +78,7 @@ The CLI deterministically attempts the following chart sequence:
 - `09_forecast_capex.(png|html)` (if forecast guidance exists)
 - `10_data_coverage.(png|html)`
 
-If required data is unavailable, the chart is skipped and the CLI prints a reason.
-
-## Design notes
-
-- Sell-side conventions: trend lines for growth, bars for discrete quarterly values, stacked area for segment mix, heatmap for coverage.
-- Stable segment coloring: segment names are hash-mapped to a fixed palette index.
-- Raw values are preserved; display unit (`$`, `$M`, `$B`) is selected transparently and labeled in chart footnotes.
-- Every chart includes source/provenance footnotes: filing accession list and `Source: SEC filings (XBRL)`.
+If required data is unavailable, the chart is marked with "Data unavailable" and remaining charts still render.
 
 ## Tests
 

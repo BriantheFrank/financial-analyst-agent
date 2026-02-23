@@ -12,8 +12,7 @@ def main() -> None:
     args = parser.parse_args()
 
     payload = load_payload(Path(args.input_json))
-    generator = ReportGenerator(payload=payload, outdir=Path(args.outdir), formats=args.format)
-    results = generator.generate()
+    results = ReportGenerator(payload=payload, outdir=Path(args.outdir), formats=args.format).generate()
 
     print("\nReport generation summary")
     print("=" * 80)

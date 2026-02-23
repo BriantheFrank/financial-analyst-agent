@@ -1,3 +1,1 @@
-from .reporting import ReportGenerator
-
-__all__ = ["ReportGenerator"]
+__all__ = []

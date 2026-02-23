@@ -329,6 +329,12 @@ def fiscal_period_label(filing: Filing) -> str:
     return filing.fp if (filing.fp or "").upper() in {"Q1", "Q2", "Q3", "Q4"} else "Q?"
 
 
+def extract_company_financials(company: str, years: int, user_agent: str | None, cache_dir: str = ".cache/sec") -> Dict[str, Any]:
+    if not user_agent:
+        raise ValueError("SEC_USER_AGENT must be set")
+    return build_financials(company, years, user_agent, cache_dir=cache_dir)
+
+
 def build_financials(company_input: str, years: int, user_agent: str, cache_dir: str = ".cache/sec") -> Dict[str, Any]:
     client = SecClient(user_agent=user_agent, cache_dir=cache_dir)
     company = resolve_company(client, company_input)
