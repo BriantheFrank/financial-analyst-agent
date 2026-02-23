@@ -61,3 +61,7 @@ Tests validate:
 - deterministic chart ordering,
 - expected file creation,
 - graceful handling of missing segment datasets.
+
+## Troubleshooting
+
+- If you see `UnicodeDecodeError` mentioning byte `0x8b`, clear `.cache/sec` and ensure you're on the latest version. The SEC client now auto-decompresses `gzip`/`deflate` responses (including older cached gzip payloads).
