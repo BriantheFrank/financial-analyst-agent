@@ -1,10 +1,12 @@
 import argparse
 import datetime as dt
+import gzip
 import json
 import logging
 import re
 import time
 import urllib.request
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,27 +50,46 @@ class SecClient:
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", url)
         return self.cache_dir / safe
 
+    def _decode_response_bytes(self, data: bytes, content_encoding: Optional[str], context: str) -> bytes:
+        encoding = (content_encoding or "").strip().lower()
+        try:
+            if encoding == "gzip":
+                return gzip.decompress(data)
+            if encoding == "deflate":
+                try:
+                    return zlib.decompress(data)
+                except zlib.error:
+                    return zlib.decompress(data, -zlib.MAX_WBITS)
+            if len(data) >= 2 and data[0] == 0x1F and data[1] == 0x8B:
+                return gzip.decompress(data)
+            return data
+        except (OSError, EOFError, zlib.error) as exc:
+            raise RuntimeError(
+                f"Failed to decompress SEC response for {context}. Content-Encoding={encoding or 'none'}"
+            ) from exc
+
     def _http_get(self, url: str) -> bytes:
         self._throttle()
         req = urllib.request.Request(url, headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip, deflate"})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return resp.read()
+            body = resp.read()
+            return self._decode_response_bytes(body, resp.headers.get("Content-Encoding"), context=f"url={url}")
 
-    def get_json(self, url: str, use_cache: bool = True) -> Dict[str, Any]:
+    def get(self, url: str, use_cache: bool = True) -> bytes:
         cp = self._cache_path(url)
         if use_cache and cp.exists():
-            return json.loads(cp.read_text())
-        data = json.loads(self._http_get(url).decode("utf-8"))
-        cp.write_text(json.dumps(data))
+            return self._decode_response_bytes(cp.read_bytes(), content_encoding=None, context=f"cache={cp}")
+        data = self._http_get(url)
+        cp.write_bytes(data)
         return data
 
+    def get_json(self, url: str, use_cache: bool = True) -> Dict[str, Any]:
+        raw = self.get(url, use_cache=use_cache)
+        text = raw.decode("utf-8")
+        return json.loads(text)
+
     def get_text(self, url: str, use_cache: bool = True) -> str:
-        cp = self._cache_path(url)
-        if use_cache and cp.exists():
-            return cp.read_text()
-        txt = self._http_get(url).decode("utf-8", errors="ignore")
-        cp.write_text(txt)
-        return txt
+        return self.get(url, use_cache=use_cache).decode("utf-8")
 
 
 def load_ticker_mapping(client: SecClient) -> List[Dict[str, Any]]:
