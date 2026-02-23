@@ -12,6 +12,36 @@ source .venv/bin/activate
 pip install requests lxml jsonschema pandas numpy matplotlib plotly kaleido pytest
 ```
 
+## One-click on Windows
+
+1. Download or clone this repository.
+2. In File Explorer, double-click `Run-Agent.cmd`.
+3. On first run, the launcher will:
+   - create `.venv` if needed,
+   - install dependencies,
+   - prompt for `SEC_USER_AGENT` (required by SEC), and
+   - save it to `.env` for future runs.
+4. The Streamlit UI starts at `http://localhost:8501` by default.
+
+If you prefer not to be prompted, copy `.env.example` to `.env` and set your value first:
+
+```powershell
+copy .env.example .env
+```
+
+Optional launcher flags:
+
+- `Run-Agent.cmd --port 8502` to change the Streamlit port.
+- `Run-Agent.cmd --reinstall` to force a dependency reinstall.
+- `Run-Agent.cmd --no-browser` to suppress automatic browser launch.
+
+### Troubleshooting (Windows)
+
+- **Python not installed**: install Python 3.11+ from [python.org](https://www.python.org/downloads/windows/), then re-run `Run-Agent.cmd`.
+- **Execution policy**: `Run-Agent.cmd` already calls PowerShell with `-ExecutionPolicy Bypass`, so no manual policy change is required for normal use.
+- **Port already in use**: run `Run-Agent.cmd --port 8502` (or another free port).
+- **Kaleido export issues**: run `pip install kaleido` inside the project environment.
+
 ## Generate extractor JSON
 
 ```bash
