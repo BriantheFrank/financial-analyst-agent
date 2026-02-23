@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+import hashlib
 from pathlib import Path
 
 import streamlit as st
@@ -30,6 +31,16 @@ def _run_extract(company: str, years: int, user_agent: str, prefer_cache: bool) 
     return extract_company_financials(company=company, years=years, user_agent=user_agent)
 
 
+def _compute_run_id(company: str, years: int, payload: dict) -> str:
+    payload_hash = hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
+    return f"{company.lower()}_{years}y_{payload_hash}"
+
+
+def render_plotly(fig, *, chart_id: str, section: str, run_id: str, **kwargs) -> None:
+    key = f"{section}_{chart_id}_{run_id}"
+    st.plotly_chart(fig, key=key, use_container_width=True, **kwargs)
+
+
 with st.sidebar:
     company = st.text_input("Company (ticker or name)", value="AAPL")
     years = st.slider("Years", min_value=1, max_value=10, value=5)
@@ -53,9 +64,12 @@ if run:
 
     payload = _run_extract(company, years, sec_ua, prefer_cache)
     st.session_state["payload"] = payload
+    st.session_state["run_id"] = _compute_run_id(company, years, payload)
 
 if "payload" in st.session_state:
     payload = st.session_state["payload"]
+    run_id = st.session_state.get("run_id") or _compute_run_id(company, years, payload)
+    st.session_state["run_id"] = run_id
     df, meta = json_to_tidy_df(payload)
     meta["period_payloads"] = payload.get("periods", [])
     meta["years"] = years
@@ -69,11 +83,11 @@ if "payload" in st.session_state:
         for col, metric, label in [(c1, "revenue", "Latest Revenue"), (c2, "profit_net_income", "Latest Net Income"), (c3, "capex", "Latest CAPEX")]:
             subset = df[(df["metric"] == metric) & (df["segment"] == "Total")].sort_values("period_end")
             col.metric(label, f"{subset.iloc[-1]['value']:,.0f}" if not subset.empty else "Data unavailable")
-        st.plotly_chart(kpis["kpi_dashboard"], use_container_width=True)
+        render_plotly(kpis["kpi_dashboard"], chart_id="01_kpi_dashboard", section="dashboard", run_id=run_id)
         for stem in ["02_revenue_trend", "04_profit_and_margin", "05_capex_trend"]:
             fig_data = next((x for x in figures if x[0] == stem), None)
             if fig_data:
-                st.plotly_chart(fig_data[1], use_container_width=True)
+                render_plotly(fig_data[1], chart_id=stem, section="dashboard", run_id=run_id)
                 if not fig_data[2].get("created"):
                     st.info(f"{fig_data[2]['title']}: Data unavailable")
 
@@ -84,7 +98,7 @@ if "payload" in st.session_state:
         for stem in order:
             fig, fig_meta = index[stem]
             st.markdown(f"**{stem} — {fig_meta.get('title')}**")
-            st.plotly_chart(fig, use_container_width=True)
+            render_plotly(fig, chart_id=stem, section="charts", run_id=run_id)
             if not fig_meta.get("created"):
                 st.caption(f"Data unavailable: {fig_meta.get('skipped_reason')}")
 
@@ -92,7 +106,7 @@ if "payload" in st.session_state:
         st.subheader("Coverage")
         coverage = next((x for x in figures if x[0] == "10_data_coverage"), None)
         if coverage:
-            st.plotly_chart(coverage[1], use_container_width=True)
+            render_plotly(coverage[1], chart_id="10_data_coverage", section="coverage", run_id=run_id)
         st.write("**Filings / Accessions used**")
         for a in meta.get("accessions", []):
             st.write(f"- {a}")
