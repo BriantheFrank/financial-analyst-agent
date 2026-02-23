@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["company", "generated_at_utc", "periods"],
+  "properties": {
+    "company": {
+      "type": "object",
+      "required": ["input", "cik", "name", "ticker"],
+      "properties": {
+        "input": {"type": "string"},
+        "cik": {"type": "string", "pattern": "^\\d{10}$"},
+        "name": {"type": "string"},
+        "ticker": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "generated_at_utc": {"type": "string"},
+    "periods": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/period"}
+    }
+  },
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "required": ["filing_type", "accession", "filing_date", "source_ref", "unit"],
+      "properties": {
+        "filing_type": {"type": "string"},
+        "accession": {"type": "string"},
+        "filing_date": {"type": "string"},
+        "source_ref": {"type": "string"},
+        "unit": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "metric": {
+      "type": ["object", "null"],
+      "required": ["value", "unit", "xbrl_tag", "source", "confidence", "provenance"],
+      "properties": {
+        "value": {"type": "number"},
+        "unit": {"type": "string"},
+        "xbrl_tag": {"type": "string"},
+        "source": {"type": "string"},
+        "confidence": {"type": "number"},
+        "capex_definition": {"type": "string"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      },
+      "additionalProperties": false
+    },
+    "segmentMetric": {
+      "type": "object",
+      "required": ["segment", "value", "unit", "xbrl_tag", "dimension", "member", "source", "confidence", "provenance"],
+      "properties": {
+        "segment": {"type": "string"},
+        "value": {"type": "number"},
+        "unit": {"type": "string"},
+        "xbrl_tag": {"type": "string"},
+        "dimension": {"type": "string"},
+        "member": {"type": "string"},
+        "source": {"type": "string"},
+        "confidence": {"type": "number"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      },
+      "additionalProperties": false
+    },
+    "forecast": {
+      "type": "object",
+      "required": ["value_min", "value_max", "unit", "timeframe", "source", "snippet", "confidence", "provenance"],
+      "properties": {
+        "value_min": {"type": "number"},
+        "value_max": {"type": "number"},
+        "unit": {"type": "string"},
+        "timeframe": {"type": "string"},
+        "source": {"type": "string"},
+        "snippet": {"type": "string"},
+        "location_hint": {"type": "string"},
+        "segment": {"type": "string"},
+        "confidence": {"type": "number"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      },
+      "additionalProperties": false
+    },
+    "period": {
+      "type": "object",
+      "required": [
+        "fiscal_year", "fiscal_period", "period_start", "period_end", "filing",
+        "revenue", "revenue_by_segment", "profit_net_income", "profit_by_segment",
+        "capex", "capex_by_segment", "forecasted_capex", "forecasted_capex_by_segment",
+        "notes", "missing_data"
+      ],
+      "properties": {
+        "fiscal_year": {"type": "integer"},
+        "fiscal_period": {"type": "string"},
+        "period_start": {"type": ["string", "null"]},
+        "period_end": {"type": "string"},
+        "filing": {
+          "type": "object",
+          "required": ["form", "filing_date", "accession", "primary_doc"],
+          "properties": {
+            "form": {"type": "string"},
+            "filing_date": {"type": "string"},
+            "accession": {"type": "string"},
+            "primary_doc": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "revenue": {"$ref": "#/$defs/metric"},
+        "revenue_by_segment": {"type": "array", "items": {"$ref": "#/$defs/segmentMetric"}},
+        "profit_net_income": {"$ref": "#/$defs/metric"},
+        "profit_by_segment": {"type": "array", "items": {"$ref": "#/$defs/segmentMetric"}},
+        "capex": {"$ref": "#/$defs/metric"},
+        "capex_by_segment": {"type": "array", "items": {"$ref": "#/$defs/segmentMetric"}},
+        "forecasted_capex": {"type": "array", "items": {"$ref": "#/$defs/forecast"}},
+        "forecasted_capex_by_segment": {"type": "array", "items": {"$ref": "#/$defs/forecast"}},
+        "notes": {"type": "array", "items": {"type": "string"}},
+        "missing_data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "reason"],
+            "properties": {
+              "field": {"type": "string"},
+              "reason": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
