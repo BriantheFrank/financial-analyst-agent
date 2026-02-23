@@ -1,61 +1,63 @@
-# SEC EDGAR Financial Extractor
+# SEC EDGAR Financial Extractor + Sell-Side Visualization Report
 
-Production-style Python tool to extract Revenue, Net Income (profit), CAPEX, segment breakdowns, and conservative forward-looking CAPEX guidance from SEC EDGAR filings.
+This repository includes:
+1. The SEC EDGAR financial extractor (`sec_financials.py`, `cli.py`), and
+2. A publication-style report generator (`report.py`, `viz/`) that turns extractor JSON into chart packs.
 
-## Setup
+## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install requests lxml jsonschema
+pip install requests lxml jsonschema pandas numpy matplotlib plotly kaleido pytest
 ```
 
-## SEC User-Agent configuration (required)
-
-SEC requires descriptive identification headers.
+## Generate extractor JSON
 
 ```bash
 export SEC_USER_AGENT="Your Name your.email@example.com"
-```
-
-You can also pass `--user-agent` directly.
-
-## Run
-
-```bash
 python cli.py --company "AAPL" --years 5 --out out.json
 ```
 
-Output is deterministic JSON (`sort_keys=True`) and can be validated with:
+## Generate sell-side style chart report
 
 ```bash
-python - <<'PY'
-import json
-from jsonschema import validate
-schema=json.load(open('schemas/financials.schema.json'))
-data=json.load(open('out.json'))
-validate(data,schema)
-print('valid')
-PY
+python report.py --in out.json --outdir reports/AAPL --format png html
 ```
 
-## What is extracted
+`--format` accepts one or both of: `png` `html`.
 
-- Revenue (XBRL tags in priority order)
-- Profit as `NetIncomeLoss`
-- CAPEX as `PaymentsToAcquirePropertyPlantAndEquipment` (fallback to `CapitalExpenditures`)
-- Segment breakdowns from XBRL dimensions (`explicitMember` contexts)
-- Forecasted CAPEX from narrative text only when explicitly forward-looking
+## Output chart set
 
-Every numeric field includes provenance (filing type, accession, filing date, source reference, unit).
+The CLI deterministically attempts the following chart sequence:
 
-## Caching and rate limiting
+- `01_kpi_dashboard.(png|html)`
+- `02_revenue_trend.(png|html)`
+- `03_revenue_by_segment.(png|html)`
+- `04_profit_and_margin.(png|html)`
+- `05_capex_trend.(png|html)`
+- `06_capex_intensity.(png|html)`
+- `07_snapshot_revenue_mix_latest_q.(png|html)`
+- `08_waterfall_revenue_yoy_change.(png|html)` (if sufficient YoY segment history)
+- `09_forecast_capex.(png|html)` (if forecast guidance exists)
+- `10_data_coverage.(png|html)`
 
-- Disk cache: `.cache/sec/`
-- Throttling: default ~3 requests/sec (safe SEC fair access posture)
+If required data is unavailable, the chart is skipped and the CLI prints a reason.
 
-## Limitations
+## Design notes
 
-- Segment availability is issuer-dependent; if dimensional facts do not exist, fields are empty and `missing_data` explains why.
-- Forecast CAPEX guidance varies widely in disclosure style; extractor is intentionally conservative and returns empty arrays unless language is clearly forward-looking.
-- Quarter-only conversion from YTD is only attempted when safely inferable; otherwise value is left as available with explanatory notes/missing reasons.
+- Sell-side conventions: trend lines for growth, bars for discrete quarterly values, stacked area for segment mix, heatmap for coverage.
+- Stable segment coloring: segment names are hash-mapped to a fixed palette index.
+- Raw values are preserved; display unit (`$`, `$M`, `$B`) is selected transparently and labeled in chart footnotes.
+- Every chart includes source/provenance footnotes: filing accession list and `Source: SEC filings (XBRL)`.
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Tests validate:
+- deterministic chart ordering,
+- expected file creation,
+- graceful handling of missing segment datasets.

@@ -1,0 +1,42 @@
+{
+  "company": {
+    "name": "Example Corp",
+    "ticker": "EXM"
+  },
+  "periods": [
+    {
+      "fiscal_year": 2023,
+      "fiscal_period": "Q1",
+      "period_end": "2023-03-31",
+      "filing": {"accession": "0001"},
+      "revenue": {"value": 1000000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "profit_net_income": {"value": 100000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "capex": {"value": 50000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "revenue_by_segment": [
+        {"segment": "Cloud", "value": 600000000, "unit": "USD", "source": "xbrl", "confidence": 0.9},
+        {"segment": "Devices", "value": 400000000, "unit": "USD", "source": "xbrl", "confidence": 0.9}
+      ],
+      "profit_by_segment": [],
+      "capex_by_segment": [],
+      "forecasted_capex": []
+    },
+    {
+      "fiscal_year": 2024,
+      "fiscal_period": "Q1",
+      "period_end": "2024-03-31",
+      "filing": {"accession": "0002"},
+      "revenue": {"value": 1200000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "profit_net_income": {"value": 150000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "capex": {"value": 70000000, "unit": "USD", "source": "xbrl", "confidence": 0.95},
+      "revenue_by_segment": [
+        {"segment": "Cloud", "value": 800000000, "unit": "USD", "source": "xbrl", "confidence": 0.9},
+        {"segment": "Devices", "value": 400000000, "unit": "USD", "source": "xbrl", "confidence": 0.9}
+      ],
+      "profit_by_segment": [],
+      "capex_by_segment": [],
+      "forecasted_capex": [
+        {"value_min": 65000000, "value_max": 90000000, "unit": "USD", "timeframe": "FY2025"}
+      ]
+    }
+  ]
+}
