@@ -3,6 +3,7 @@ import datetime as dt
 import gzip
 import json
 import logging
+import shutil
 import re
 import time
 import urllib.request
@@ -29,7 +30,15 @@ class Filing:
 
 
 class SecClient:
-    def __init__(self, user_agent: str, cache_dir: str = ".cache/sec", rate_limit_per_sec: float = 3.0, timeout: int = 30):
+    def __init__(
+        self,
+        user_agent: str,
+        cache_dir: str = ".cache/sec",
+        rate_limit_per_sec: float = 3.0,
+        timeout: int = 30,
+        max_file_size_mb: float = 25.0,
+        max_total_download_mb: float = 200.0,
+    ):
         if not user_agent:
             raise ValueError("SEC_USER_AGENT must be set")
         self.user_agent = user_agent
@@ -38,6 +47,11 @@ class SecClient:
         self.min_interval = 1.0 / max(rate_limit_per_sec, 0.1)
         self.timeout = timeout
         self._last_request_ts = 0.0
+        self.max_file_size_bytes = int(max_file_size_mb * 1024 * 1024)
+        self.max_total_download_bytes = int(max_total_download_mb * 1024 * 1024)
+        self.total_downloaded_bytes = 0
+        self.request_count = 0
+        self.downloaded_artifacts: Dict[str, List[str]] = {}
 
     def _throttle(self) -> None:
         now = time.time()
@@ -47,7 +61,12 @@ class SecClient:
         self._last_request_ts = time.time()
 
     def _cache_path(self, url: str) -> Path:
+        cik = _extract_cik_from_url(url)
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", url)
+        if cik:
+            p = self.cache_dir / cik
+            p.mkdir(parents=True, exist_ok=True)
+            return p / safe
         return self.cache_dir / safe
 
     def _decode_response_bytes(self, data: bytes, content_encoding: Optional[str], context: str) -> bytes:
@@ -73,7 +92,23 @@ class SecClient:
         req = urllib.request.Request(url, headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip, deflate"})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             body = resp.read()
-            return self._decode_response_bytes(body, resp.headers.get("Content-Encoding"), context=f"url={url}")
+            data = self._decode_response_bytes(body, resp.headers.get("Content-Encoding"), context=f"url={url}")
+            size = len(data)
+            if size > self.max_file_size_bytes:
+                raise RuntimeError(
+                    f"SEC artifact too large ({size:,} bytes) for {url}. "
+                    f"Per-file cap is {self.max_file_size_bytes:,} bytes. "
+                    "Reduce scope or increase max_file_size_mb."
+                )
+            if self.total_downloaded_bytes + size > self.max_total_download_bytes:
+                raise RuntimeError(
+                    f"SEC download cap exceeded at {self.total_downloaded_bytes + size:,} bytes. "
+                    f"Run cap is {self.max_total_download_bytes:,} bytes. "
+                    "Reduce scope (segments_mode/max_quarters) or increase max_total_download_mb."
+                )
+            self.total_downloaded_bytes += size
+            self.request_count += 1
+            return data
 
     def get(self, url: str, use_cache: bool = True) -> bytes:
         cp = self._cache_path(url)
@@ -82,6 +117,16 @@ class SecClient:
         data = self._http_get(url)
         cp.write_bytes(data)
         return data
+
+    def record_artifact(self, filing_accession: str, artifact_name: str) -> None:
+        self.downloaded_artifacts.setdefault(filing_accession, []).append(artifact_name)
+
+    def print_download_summary(self) -> None:
+        print(
+            f"Download summary: bytes={self.total_downloaded_bytes:,}, requests={self.request_count}"
+        )
+        for accession, artifacts in sorted(self.downloaded_artifacts.items()):
+            print(f"  {accession}: {', '.join(sorted(set(artifacts)))}")
 
     def get_json(self, url: str, use_cache: bool = True) -> Dict[str, Any]:
         raw = self.get(url, use_cache=use_cache)
@@ -147,6 +192,15 @@ def collect_filings(submissions: Dict[str, Any], years: int = 5) -> List[Filing]
     return out
 
 
+def limit_filings_scope(filings: List[Filing], max_quarters: int = 8) -> List[Filing]:
+    annuals = [f for f in filings if f.form == "10-K"]
+    quarters = [f for f in filings if f.form == "10-Q"]
+    quarters.sort(key=lambda f: (f.report_date or f.filing_date), reverse=True)
+    scoped = annuals + quarters[:max_quarters]
+    scoped.sort(key=lambda f: (f.report_date or f.filing_date, f.form))
+    return scoped
+
+
 def get_companyfacts(client: SecClient, cik: str) -> Dict[str, Any]:
     return client.get_json(f"{DATA_BASE}/api/xbrl/companyfacts/CIK{cik}.json")
 
@@ -208,17 +262,52 @@ def extract_primary_metrics(companyfacts: Dict[str, Any], filing: Filing) -> Tup
     }, notes, missing
 
 
+def _is_skippable_artifact(name: str, size: int = 0, *, max_size_bytes: int) -> bool:
+    low = name.lower()
+    blocked_exts = (
+        ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".zip", ".xls", ".xlsx", ".doc", ".docx", ".ppt", ".pptx"
+    )
+    if low.endswith(blocked_exts):
+        return True
+    if size and size > max_size_bytes:
+        return True
+    return False
+
+
+def _choose_instance_from_index(items: List[Dict[str, Any]]) -> Optional[str]:
+    candidates = []
+    for it in items:
+        name = it.get("name")
+        if not name or not name.lower().endswith(".xml"):
+            continue
+        low = name.lower()
+        typ = (it.get("type") or "").upper()
+        if re.search(r"_(cal|def|lab|pre)\.xml$", low) or low.endswith(".xsd"):
+            continue
+        score = 0
+        if low.endswith("_htm.xml"):
+            score += 100
+        if "EX-101.INS" in typ or "INSTANCE" in typ:
+            score += 50
+        score += int(it.get("size") or 0) // 1024
+        candidates.append((score, name))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
 def _find_instance_doc(client: SecClient, cik: str, accession: str) -> Optional[str]:
     acc = accession.replace("-", "")
     try:
         idx = client.get_json(f"{SEC_BASE}/Archives/edgar/data/{int(cik)}/{acc}/index.json")
     except Exception:
         return None
-    names = [x.get("name") for x in idx.get("directory", {}).get("item", []) if x.get("name")]
-    xmls = [n for n in names if n.endswith(".xml") and not re.search(r"_(cal|def|lab|pre)\.xml$", n)]
-    if not xmls:
+    items = [x for x in idx.get("directory", {}).get("item", []) if x.get("name")]
+    items = [x for x in items if not _is_skippable_artifact(x.get("name", ""), int(x.get("size") or 0), max_size_bytes=client.max_file_size_bytes)]
+    chosen = _choose_instance_from_index(items)
+    if not chosen:
         return None
-    chosen = sorted(xmls, key=lambda n: ("htm.xml" not in n, len(n)))[0]
     return f"{SEC_BASE}/Archives/edgar/data/{int(cik)}/{acc}/{chosen}"
 
 
@@ -228,6 +317,7 @@ def extract_segment_metrics(client: SecClient, cik: str, filing: Filing) -> Tupl
         return {"revenue_by_segment": [], "profit_by_segment": [], "capex_by_segment": []}, [{"field": "segment_metrics", "reason": "XBRL instance XML not found for filing."}]
 
     root = ET.fromstring(client.get_text(instance))
+    client.record_artifact(filing.accession, instance.rsplit("/", 1)[-1])
     ns = {
         "xbrli": "http://www.xbrl.org/2003/instance",
         "xbrldi": "http://xbrl.org/2006/xbrldi",
@@ -329,22 +419,61 @@ def fiscal_period_label(filing: Filing) -> str:
     return filing.fp if (filing.fp or "").upper() in {"Q1", "Q2", "Q3", "Q4"} else "Q?"
 
 
-def extract_company_financials(company: str, years: int, user_agent: str | None, cache_dir: str = ".cache/sec") -> Dict[str, Any]:
+def extract_company_financials(
+    company: str,
+    years: int,
+    user_agent: str | None,
+    cache_dir: str = ".cache/sec",
+    segments_mode: str = "annual",
+    max_quarters: int = 8,
+    max_file_size_mb: float = 25.0,
+    max_total_download_mb: float = 200.0,
+) -> Dict[str, Any]:
     if not user_agent:
         raise ValueError("SEC_USER_AGENT must be set")
-    return build_financials(company, years, user_agent, cache_dir=cache_dir)
+    return build_financials(
+        company,
+        years,
+        user_agent,
+        cache_dir=cache_dir,
+        segments_mode=segments_mode,
+        max_quarters=max_quarters,
+        max_file_size_mb=max_file_size_mb,
+        max_total_download_mb=max_total_download_mb,
+    )
 
 
-def build_financials(company_input: str, years: int, user_agent: str, cache_dir: str = ".cache/sec") -> Dict[str, Any]:
-    client = SecClient(user_agent=user_agent, cache_dir=cache_dir)
+def build_financials(
+    company_input: str,
+    years: int,
+    user_agent: str,
+    cache_dir: str = ".cache/sec",
+    segments_mode: str = "annual",
+    max_quarters: int = 8,
+    max_file_size_mb: float = 25.0,
+    max_total_download_mb: float = 200.0,
+) -> Dict[str, Any]:
+    if segments_mode not in {"none", "annual", "full"}:
+        raise ValueError("segments_mode must be one of: none, annual, full")
+    client = SecClient(
+        user_agent=user_agent,
+        cache_dir=cache_dir,
+        max_file_size_mb=max_file_size_mb,
+        max_total_download_mb=max_total_download_mb,
+    )
     company = resolve_company(client, company_input)
-    filings = collect_filings(get_submissions(client, company["cik"]), years)
+    filings = limit_filings_scope(collect_filings(get_submissions(client, company["cik"]), years), max_quarters=max_quarters)
     companyfacts = get_companyfacts(client, company["cik"])
     periods = []
     for f in filings:
         primary, notes, missing = extract_primary_metrics(companyfacts, f)
-        seg, seg_missing = extract_segment_metrics(client, company["cik"], f)
-        fc, fc_missing = extract_forecasted_capex(client, company["cik"], f)
+        do_segments = segments_mode == "full" or (segments_mode == "annual" and f.form == "10-K")
+        if do_segments:
+            seg, seg_missing = extract_segment_metrics(client, company["cik"], f)
+        else:
+            seg = {"revenue_by_segment": [], "profit_by_segment": [], "capex_by_segment": []}
+            seg_missing = [{"field": "segment_metrics", "reason": f"Skipped due to segments_mode={segments_mode} for form {f.form}."}]
+        fc, fc_missing = [], [{"field": "forecasted_capex", "reason": "Skipped to reduce download volume; textual filing artifacts are not downloaded."}]
         end = f.report_date or f.filing_date
         periods.append({
             "fiscal_year": f.fy or int(end[:4]), "fiscal_period": fiscal_period_label(f),
@@ -357,11 +486,61 @@ def build_financials(company_input: str, years: int, user_agent: str, cache_dir:
             "notes": sorted(set(notes)), "missing_data": missing + seg_missing + fc_missing,
         })
     periods.sort(key=lambda p: (p["fiscal_year"], p["fiscal_period"], p["period_end"]))
+    client.print_download_summary()
     return {
         "company": {"input": company_input, "cik": company["cik"], "name": company["name"], "ticker": company["ticker"]},
         "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "periods": periods,
     }
+
+
+def clear_company_cache(cik: str, cache_dir: str = ".cache/sec") -> None:
+    company_path = Path(cache_dir) / str(int(cik)).zfill(10)
+    if company_path.exists():
+        shutil.rmtree(company_path)
+
+
+def prune_cache(cache_dir: str = ".cache/sec", max_age_days: int = 30, max_total_gb: float = 2.0) -> None:
+    root = Path(cache_dir)
+    if not root.exists():
+        return
+    now = time.time()
+    age_cutoff = now - (max_age_days * 86400)
+    files = [p for p in root.rglob("*") if p.is_file()]
+
+    for p in files:
+        if p.stat().st_mtime < age_cutoff:
+            p.unlink(missing_ok=True)
+
+    files = [p for p in root.rglob("*") if p.is_file()]
+    max_total_bytes = int(max_total_gb * 1024 * 1024 * 1024)
+    total = sum(p.stat().st_size for p in files)
+    if total <= max_total_bytes:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime)
+    for p in files:
+        if total <= max_total_bytes:
+            break
+        size = p.stat().st_size
+        p.unlink(missing_ok=True)
+        total -= size
+
+
+def company_cache_size_bytes(cik: str, cache_dir: str = ".cache/sec") -> int:
+    company_path = Path(cache_dir) / str(int(cik)).zfill(10)
+    if not company_path.exists():
+        return 0
+    return sum(p.stat().st_size for p in company_path.rglob("*") if p.is_file())
+
+
+def _extract_cik_from_url(url: str) -> Optional[str]:
+    m = re.search(r"CIK(\d{10})\.json", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"/edgar/data/(\d+)/", url)
+    if m:
+        return str(int(m.group(1))).zfill(10)
+    return None
 
 
 def main() -> None:
@@ -371,10 +550,33 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--user-agent", default=None)
     ap.add_argument("--cache-dir", default=".cache/sec")
+    ap.add_argument("--segments-mode", choices=["none", "annual", "full"], default="annual")
+    ap.add_argument("--max-quarters", type=int, default=8)
+    ap.add_argument("--max-file-size-mb", type=float, default=25.0)
+    ap.add_argument("--max-total-download-mb", type=float, default=200.0)
+    ap.add_argument("--clear-company-cache", default=None, help="CIK to clear in cache and exit")
+    ap.add_argument("--prune-cache", action="store_true", help="Prune cache using configured policy and exit")
+    ap.add_argument("--prune-max-age-days", type=int, default=30)
+    ap.add_argument("--prune-max-total-gb", type=float, default=2.0)
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.clear_company_cache:
+        clear_company_cache(args.clear_company_cache, cache_dir=args.cache_dir)
+        return
+    if args.prune_cache:
+        prune_cache(cache_dir=args.cache_dir, max_age_days=args.prune_max_age_days, max_total_gb=args.prune_max_total_gb)
+        return
     ua = args.user_agent or __import__("os").environ.get("SEC_USER_AGENT")
-    out = build_financials(args.company, args.years, ua, cache_dir=args.cache_dir)
+    out = build_financials(
+        args.company,
+        args.years,
+        ua,
+        cache_dir=args.cache_dir,
+        segments_mode=args.segments_mode,
+        max_quarters=args.max_quarters,
+        max_file_size_mb=args.max_file_size_mb,
+        max_total_download_mb=args.max_total_download_mb,
+    )
     Path(args.out).write_text(json.dumps(out, indent=2, sort_keys=True))
 
 

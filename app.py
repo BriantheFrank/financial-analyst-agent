@@ -9,7 +9,14 @@ from pathlib import Path
 
 import streamlit as st
 
-from sec_financials import extract_company_financials
+from sec_financials import (
+    company_cache_size_bytes,
+    clear_company_cache,
+    extract_company_financials,
+    prune_cache,
+    resolve_company,
+    SecClient,
+)
 from viz.charts import CHART_ORDER, build_all_figures, build_kpi_dashboard_figures
 from viz.export import export_report_pack
 from viz.transform import json_to_tidy_df
@@ -20,15 +27,39 @@ st.title("Financial Analyst Agent (Local)")
 
 
 @st.cache_data(show_spinner=False)
-def _cached_extract(company: str, years: int, user_agent: str) -> dict:
-    return extract_company_financials(company=company, years=years, user_agent=user_agent)
+def _cached_extract(
+    company: str,
+    years: int,
+    user_agent: str,
+    segments_mode: str,
+    max_quarters: int,
+    max_file_size_mb: float,
+    max_total_download_mb: float,
+) -> dict:
+    return extract_company_financials(
+        company=company,
+        years=years,
+        user_agent=user_agent,
+        segments_mode=segments_mode,
+        max_quarters=max_quarters,
+        max_file_size_mb=max_file_size_mb,
+        max_total_download_mb=max_total_download_mb,
+    )
 
 
-def _run_extract(company: str, years: int, user_agent: str, prefer_cache: bool) -> dict:
+def _run_extract(company: str, years: int, user_agent: str, prefer_cache: bool, segments_mode: str, max_quarters: int, max_file_size_mb: float, max_total_download_mb: float) -> dict:
     if prefer_cache:
-        return _cached_extract(company, years, user_agent)
+        return _cached_extract(company, years, user_agent, segments_mode, max_quarters, max_file_size_mb, max_total_download_mb)
     _cached_extract.clear()
-    return extract_company_financials(company=company, years=years, user_agent=user_agent)
+    return extract_company_financials(
+        company=company,
+        years=years,
+        user_agent=user_agent,
+        segments_mode=segments_mode,
+        max_quarters=max_quarters,
+        max_file_size_mb=max_file_size_mb,
+        max_total_download_mb=max_total_download_mb,
+    )
 
 
 def _compute_run_id(company: str, years: int, payload: dict) -> str:
@@ -44,11 +75,31 @@ def render_plotly(fig, *, chart_id: str, section: str, run_id: str, **kwargs) ->
 with st.sidebar:
     company = st.text_input("Company (ticker or name)", value="AAPL")
     years = st.slider("Years", min_value=1, max_value=10, value=5)
+    max_quarters = st.slider("Max quarters (10-Q)", min_value=1, max_value=20, value=8)
+    segments_mode = st.selectbox("Segment extraction mode", options=["none", "annual", "full"], index=1)
+    max_file_size_mb = st.number_input("Max file size (MB)", min_value=1.0, max_value=200.0, value=25.0, step=1.0)
+    max_total_download_mb = st.number_input("Max total download per run (MB)", min_value=10.0, max_value=2000.0, value=200.0, step=10.0)
     prefer_cache = st.checkbox("Prefer cached downloads", value=True)
     sec_ua = os.environ.get("SEC_USER_AGENT")
     if not sec_ua:
         sec_ua = st.text_input("SEC_USER_AGENT", value="", help="Required by SEC policy.")
     run = st.button("Extract & Visualize", type="primary")
+
+    selected_cik = None
+    if sec_ua and company.strip():
+        try:
+            selected_cik = resolve_company(SecClient(user_agent=sec_ua), company)["cik"]
+            st.caption(f"Cache size for CIK {selected_cik}: {company_cache_size_bytes(selected_cik)/1024/1024:.2f} MB")
+        except Exception:
+            pass
+
+    if st.button("Clear cache for current company") and selected_cik:
+        clear_company_cache(selected_cik)
+        st.success(f"Cleared cache for {selected_cik}")
+
+    if st.button("Prune cache (30 days / 2GB)"):
+        prune_cache(max_age_days=30, max_total_gb=2.0)
+        st.success("Pruned SEC cache")
 
 if run:
     if not sec_ua:
@@ -62,7 +113,7 @@ if run:
         st.write("3) Extract metrics to JSON")
         st.write("4) Build charts")
 
-    payload = _run_extract(company, years, sec_ua, prefer_cache)
+    payload = _run_extract(company, years, sec_ua, prefer_cache, segments_mode, max_quarters, max_file_size_mb, max_total_download_mb)
     st.session_state["payload"] = payload
     st.session_state["run_id"] = _compute_run_id(company, years, payload)
 
