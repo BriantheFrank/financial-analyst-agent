@@ -16,16 +16,16 @@ def export_report_pack(outdir: Path, json_payload: Dict[str, Any], figures: List
 
     missing = []
     for stem, fig, chart_meta in figures:
+        if not chart_meta.get("created"):
+            missing.append(f"{stem}: {chart_meta.get('skipped_reason', 'Data unavailable')}")
+            continue
         html_path = outdir / f"{stem}.html"
         fig.write_html(str(html_path), include_plotlyjs="cdn")
-        if chart_meta.get("created"):
-            png_path = outdir / f"{stem}.png"
-            try:
-                fig.write_image(str(png_path), width=1400, height=900, scale=2)
-            except Exception:
-                missing.append(f"{stem}: PNG export unavailable (kaleido missing or failed)")
-        else:
-            missing.append(f"{stem}: {chart_meta.get('skipped_reason', 'Data unavailable')}")
+        png_path = outdir / f"{stem}.png"
+        try:
+            fig.write_image(str(png_path), width=1400, height=900, scale=2)
+        except Exception:
+            missing.append(f"{stem}: PNG export unavailable (kaleido missing or failed)")
 
     summary_lines = [
         f"company: {meta.get('company_name', 'Unknown')}",

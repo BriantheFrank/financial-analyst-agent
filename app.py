@@ -1,26 +1,24 @@
 from __future__ import annotations
 
-import io
+import hashlib
 import json
 import os
 import tempfile
-import hashlib
 from pathlib import Path
 
 import streamlit as st
 
 from sec_financials import (
-    company_cache_size_bytes,
+    SecClient,
     clear_company_cache,
+    company_cache_size_bytes,
     extract_company_financials,
     prune_cache,
     resolve_company,
-    SecClient,
 )
 from viz.charts import CHART_ORDER, build_all_figures, build_kpi_dashboard_figures
 from viz.export import export_report_pack
-from viz.transform import json_to_tidy_df
-
+from viz.transform import filter_df_by_granularity, json_to_tidy_df
 
 st.set_page_config(page_title="Financial Analyst Agent (Local)", layout="wide")
 st.title("Financial Analyst Agent (Local)")
@@ -75,6 +73,8 @@ def render_plotly(fig, *, chart_id: str, section: str, run_id: str, **kwargs) ->
 with st.sidebar:
     company = st.text_input("Company (ticker or name)", value="AAPL")
     years = st.slider("Years", min_value=1, max_value=10, value=5)
+    granularity_label = st.radio("View", options=["Quarterly", "Annual"], index=0)
+    granularity = "quarterly" if granularity_label == "Quarterly" else "annual"
     max_quarters = st.slider("Max quarters (10-Q)", min_value=1, max_value=20, value=8)
     segments_mode = st.selectbox("Segment extraction mode", options=["none", "annual", "full"], index=1)
     max_file_size_mb = st.number_input("Max file size (MB)", min_value=1.0, max_value=200.0, value=25.0, step=1.0)
@@ -124,18 +124,34 @@ if "payload" in st.session_state:
     df, meta = json_to_tidy_df(payload)
     meta["period_payloads"] = payload.get("periods", [])
     meta["years"] = years
-    figures = build_all_figures(df, meta)
-    kpis = build_kpi_dashboard_figures(df, meta)
 
-    tabs = st.tabs(["Dashboard", "Charts", "Data & Coverage", "Downloads"])
+    df_filtered = filter_df_by_granularity(df, granularity)
+    period_options = []
+    selected_period_end = None
+    if not df_filtered.empty:
+        periods = df_filtered[["period_end", "period_label"]].drop_duplicates().sort_values("period_end")
+        period_options = [(row.period_label, row.period_end) for row in periods.itertuples(index=False)]
+    with st.sidebar:
+        if period_options:
+            labels = [x[0] for x in period_options]
+            default_idx = len(labels) - 1
+            selected_label = st.selectbox("Period", options=labels, index=default_idx)
+            selected_period_end = next(v for l, v in period_options if l == selected_label)
+        else:
+            st.caption("No periods available for selected view.")
+
+    figures = build_all_figures(df, meta, granularity=granularity, selected_period_end=selected_period_end)
+    kpis = build_kpi_dashboard_figures(df_filtered, meta)
+
+    tabs = st.tabs(["Dashboard", "Charts", "Downloads"])
 
     with tabs[0]:
         c1, c2, c3 = st.columns(3)
         for col, metric, label in [(c1, "revenue", "Latest Revenue"), (c2, "profit_net_income", "Latest Net Income"), (c3, "capex", "Latest CAPEX")]:
-            subset = df[(df["metric"] == metric) & (df["segment"] == "Total")].sort_values("period_end")
+            subset = df_filtered[(df_filtered["metric"] == metric) & (df_filtered["segment"] == "Total")].sort_values("period_end")
             col.metric(label, f"{subset.iloc[-1]['value']:,.0f}" if not subset.empty else "Data unavailable")
         render_plotly(kpis["kpi_dashboard"], chart_id="01_kpi_dashboard", section="dashboard", run_id=run_id)
-        for stem in ["02_revenue_trend", "04_profit_and_margin", "05_capex_trend"]:
+        for stem in ["02_revenue_trend", "03_profit_and_margin", "04_capex_trend"]:
             fig_data = next((x for x in figures if x[0] == stem), None)
             if fig_data:
                 render_plotly(fig_data[1], chart_id=stem, section="dashboard", run_id=run_id)
@@ -147,25 +163,23 @@ if "payload" in st.session_state:
         order = [s for s, _ in CHART_ORDER]
         index = {s: (f, m) for s, f, m in figures}
         for stem in order:
+            if stem not in index:
+                continue
             fig, fig_meta = index[stem]
             st.markdown(f"**{stem} — {fig_meta.get('title')}**")
             render_plotly(fig, chart_id=stem, section="charts", run_id=run_id)
             if not fig_meta.get("created"):
                 st.caption(f"Data unavailable: {fig_meta.get('skipped_reason')}")
 
-    with tabs[2]:
-        st.subheader("Coverage")
-        coverage = next((x for x in figures if x[0] == "10_data_coverage"), None)
-        if coverage:
-            render_plotly(coverage[1], chart_id="10_data_coverage", section="coverage", run_id=run_id)
         st.write("**Filings / Accessions used**")
         for a in meta.get("accessions", []):
             st.write(f"- {a}")
-        st.write("**Transformations**")
-        for tr in meta.get("transformations", []):
-            st.write(f"- {tr}")
+        if meta.get("transformations"):
+            st.write("**Transformations**")
+            for tr in meta.get("transformations", []):
+                st.write(f"- {tr}")
 
-    with tabs[3]:
+    with tabs[2]:
         st.subheader("Downloads")
         json_bytes = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
         st.download_button("Download extracted JSON", data=json_bytes, file_name="extracted_financials.json", mime="application/json")
