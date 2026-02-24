@@ -44,6 +44,10 @@ python report.py --in out.json --outdir reports/AAPL --format png html
 
 `--format` accepts one or both of: `png` `html`.
 
+## New Premium UI
+
+The Streamlit app now includes a premium Simply Wall St–style interface with themed cards, KPI overview, a 5-axis snowflake radar, and streamlined deep-dive tabs.
+
 ## Run the UI (local only)
 
 ```bash
@@ -60,7 +64,7 @@ Windows PowerShell one-click launcher:
 The UI includes:
 - sidebar controls for company/years/cache preference,
 - interactive Plotly charts (hover/zoom/legend),
-- data coverage + accession details,
+- premium card-based layout + snowflake visualization,
 - downloads for extractor JSON and a report ZIP pack (HTML + PNG + JSON + summary).
 
 ## Output chart set
@@ -76,7 +80,6 @@ The pipeline deterministically attempts the following chart sequence:
 - `07_snapshot_revenue_mix_latest_q.(png|html)`
 - `08_waterfall_revenue_yoy_change.(png|html)` (if sufficient YoY segment history)
 - `09_forecast_capex.(png|html)` (if forecast guidance exists)
-- `10_data_coverage.(png|html)`
 
 If required data is unavailable, the chart is marked with "Data unavailable" and remaining charts still render.
 
