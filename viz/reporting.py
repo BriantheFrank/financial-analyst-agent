@@ -35,7 +35,7 @@ class ReportGenerator:
             fig, fig_meta = all_figures[stem]
             files: List[str] = []
 
-            if "html" in self.formats:
+            if fig_meta.get("created") and "html" in self.formats:
                 html_path = self.outdir / f"{stem}.html"
                 fig.write_html(str(html_path), include_plotlyjs="cdn")
                 files.append(html_path.name)

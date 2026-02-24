@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
 import pandas as pd
 
 
 TIDY_COLUMNS = [
     "period_end",
+    "period_type",
+    "period_label",
     "fiscal_year",
     "fiscal_period",
     "metric",
@@ -19,6 +21,31 @@ TIDY_COLUMNS = [
 ]
 
 
+def _normalize_period_type(fiscal_period: Any) -> str | None:
+    period = str(fiscal_period or "").upper().strip()
+    if period in {"Q1", "Q2", "Q3", "Q4"}:
+        return "quarterly"
+    if period == "FY":
+        return "annual"
+    return None
+
+
+def _period_label(fiscal_year: Any, fiscal_period: Any) -> str:
+    fy = str(fiscal_year) if fiscal_year is not None else "Unknown"
+    fp = str(fiscal_period or "").upper().strip()
+    if fp == "FY":
+        return f"FY{fy}"
+    if fp in {"Q1", "Q2", "Q3", "Q4"}:
+        return f"{fy} {fp}"
+    return f"{fy} {fp}".strip()
+
+
+def filter_df_by_granularity(df: pd.DataFrame, granularity: Literal["quarterly", "annual"]) -> pd.DataFrame:
+    if df.empty or "period_type" not in df.columns:
+        return df.copy()
+    return df[df["period_type"] == granularity].copy()
+
+
 def json_to_tidy_df(payload: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     transformations: List[str] = []
@@ -27,6 +54,8 @@ def json_to_tidy_df(payload: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, An
     for period in payload.get("periods", []):
         base = {
             "period_end": period.get("period_end"),
+            "period_type": _normalize_period_type(period.get("fiscal_period")),
+            "period_label": _period_label(period.get("fiscal_year"), period.get("fiscal_period")),
             "fiscal_year": period.get("fiscal_year"),
             "fiscal_period": period.get("fiscal_period"),
         }
