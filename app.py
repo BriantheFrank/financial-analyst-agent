@@ -31,7 +31,17 @@ st.caption("Simply Wall St–style premium view")
 
 
 @st.cache_data(show_spinner=False)
-def _cached_extract(company: str, years: int, user_agent: str, segments_mode: str, max_quarters: int, max_file_size_mb: float, max_total_download_mb: float) -> dict:
+def _cached_extract(
+    company: str,
+    years: int,
+    user_agent: str,
+    segments_mode: str,
+    max_quarters: int,
+    max_file_size_mb: float,
+    max_total_download_mb: float,
+    granularity: str,
+) -> dict:
+    _ = granularity
     return extract_company_financials(
         company=company,
         years=years,
@@ -43,11 +53,29 @@ def _cached_extract(company: str, years: int, user_agent: str, segments_mode: st
     )
 
 
-def _run_extract(company: str, years: int, user_agent: str, prefer_cache: bool, segments_mode: str, max_quarters: int, max_file_size_mb: float, max_total_download_mb: float) -> dict:
+def _run_extract(
+    company: str,
+    years: int,
+    user_agent: str,
+    prefer_cache: bool,
+    segments_mode: str,
+    max_quarters: int,
+    max_file_size_mb: float,
+    max_total_download_mb: float,
+    granularity: str,
+) -> dict:
     if prefer_cache:
-        return _cached_extract(company, years, user_agent, segments_mode, max_quarters, max_file_size_mb, max_total_download_mb)
+        return _cached_extract(company, years, user_agent, segments_mode, max_quarters, max_file_size_mb, max_total_download_mb, granularity)
     _cached_extract.clear()
-    return extract_company_financials(company=company, years=years, user_agent=user_agent, segments_mode=segments_mode, max_quarters=max_quarters, max_file_size_mb=max_file_size_mb, max_total_download_mb=max_total_download_mb)
+    return extract_company_financials(
+        company=company,
+        years=years,
+        user_agent=user_agent,
+        segments_mode=segments_mode,
+        max_quarters=max_quarters,
+        max_file_size_mb=max_file_size_mb,
+        max_total_download_mb=max_total_download_mb,
+    )
 
 
 def _compute_run_id(company: str, years: int, payload: dict) -> str:
@@ -68,7 +96,31 @@ def _latest_metric(df: pd.DataFrame, metric: str) -> float | None:
     return None if subset.empty else float(subset.iloc[-1]["value"])
 
 
+def _stage_runner():
+    try:
+        return st.status("Running data pipeline...", expanded=True)
+    except Exception:
+        return None
+
+
+def _stage_mark(status_panel, text: str, state: str = "running") -> None:
+    if status_panel is not None:
+        status_panel.update(label=text, state=state)
+    elif state == "running":
+        st.info(text)
+    elif state == "complete":
+        st.success(text)
+    else:
+        st.warning(text)
+
+
 status = st.session_state.get("status", "Ready")
+debug_mode = st.sidebar.checkbox("Debug mode", value=False)
+if st.sidebar.button("Clear Streamlit cache"):
+    st.cache_data.clear()
+    st.success("Streamlit cache cleared.")
+    st.rerun()
+
 with card("Header / Controls"):
     c1, c2, c3, c4 = st.columns([2.2, 1, 1, 1])
     company = c1.text_input("Company (ticker or name)", value="AAPL")
@@ -91,8 +143,10 @@ with card("Header / Controls"):
             cik = resolve_company(SecClient(user_agent=sec_ua), company)["cik"]
             clear_company_cache(cik)
             st.success(f"Cleared cache for {cik}")
-        except Exception:
-            st.warning("Could not clear cache for company")
+        except Exception as e:
+            st.error("Clearing company cache failed.")
+            st.exception(e)
+            st.stop()
     if r3.button("Prune cache"):
         prune_cache(max_age_days=30, max_total_gb=2.0)
         st.success("Pruned SEC cache")
@@ -104,23 +158,112 @@ if run:
         st.session_state["status"] = "Error"
         st.error("SEC_USER_AGENT is required.")
         st.stop()
+
     st.session_state["status"] = "Fetching"
-    payload = _run_extract(company, years, sec_ua, prefer_cache, segments_mode, max_quarters, max_file_size_mb, max_total_download_mb)
+    status_panel = _stage_runner()
+
+    try:
+        _stage_mark(status_panel, "1) Resolve company / CIK", state="running")
+        resolved = resolve_company(SecClient(user_agent=sec_ua), company)
+        _stage_mark(status_panel, f"1) Resolve company / CIK ✅ ({resolved.get('cik', 'N/A')})", state="complete")
+    except Exception as e:
+        _stage_mark(status_panel, "1) Resolve company / CIK failed", state="error")
+        st.session_state["status"] = "Error"
+        st.error("Resolve company / CIK failed.")
+        st.exception(e)
+        st.stop()
+
+    try:
+        _stage_mark(status_panel, "2) Fetch filings / extract payload", state="running")
+        payload = _run_extract(
+            company=company,
+            years=years,
+            user_agent=sec_ua,
+            prefer_cache=prefer_cache,
+            segments_mode=segments_mode,
+            max_quarters=max_quarters,
+            max_file_size_mb=max_file_size_mb,
+            max_total_download_mb=max_total_download_mb,
+            granularity=granularity,
+        )
+        _stage_mark(status_panel, f"2) Fetch filings / extract payload ✅ ({len(payload.get('periods', []) or [])} periods)", state="complete")
+    except Exception as e:
+        _stage_mark(status_panel, "2) Fetch filings / extract payload failed", state="error")
+        st.session_state["status"] = "Error"
+        st.error("Fetch filings / extract payload failed.")
+        st.exception(e)
+        st.stop()
+
+    try:
+        _stage_mark(status_panel, "3) Transform payload to tidy df", state="running")
+        df, meta = json_to_tidy_df(payload)
+        _stage_mark(status_panel, f"3) Transform payload to tidy df ✅ (shape={df.shape})", state="complete")
+    except Exception as e:
+        _stage_mark(status_panel, "3) Transform payload to tidy df failed", state="error")
+        st.session_state["status"] = "Error"
+        st.error("Transform payload to tidy dataframe failed.")
+        st.exception(e)
+        st.stop()
+
+    try:
+        _stage_mark(status_panel, "4) Build figures", state="running")
+        preview_figures = build_all_figures(df, {**meta, "period_payloads": payload.get("periods", [])}, granularity=granularity, selected_period_end=None)
+        _stage_mark(status_panel, f"4) Build figures ✅ ({len(preview_figures)} figures)", state="complete")
+    except Exception as e:
+        _stage_mark(status_panel, "4) Build figures failed", state="error")
+        st.session_state["status"] = "Error"
+        st.error("Build figures failed.")
+        st.exception(e)
+        st.stop()
+
+    st.session_state["resolved_company"] = resolved
     st.session_state["payload"] = payload
+    st.session_state["df"] = df
+    st.session_state["meta"] = meta
     st.session_state["run_id"] = _compute_run_id(company, years, payload)
     st.session_state["status"] = "Complete"
 
 if "payload" in st.session_state:
     payload = st.session_state["payload"]
     run_id = st.session_state.get("run_id") or _compute_run_id(company, years, payload)
-    df, meta = json_to_tidy_df(payload)
-    meta["period_payloads"] = payload.get("periods", [])
+    try:
+        df = st.session_state.get("df")
+        meta = st.session_state.get("meta")
+        if df is None or meta is None:
+            df, meta = json_to_tidy_df(payload)
+        meta["period_payloads"] = payload.get("periods", [])
+    except Exception as e:
+        st.error("Transform payload to tidy dataframe failed.")
+        st.exception(e)
+        st.stop()
 
     dfg = filter_df_by_granularity(df, granularity)
+
+    if debug_mode:
+        with st.expander("Debug panel", expanded=False):
+            st.write("payload keys:", sorted(payload.keys()))
+            st.write("payload periods length:", len(payload.get("periods", []) or []))
+            st.write("df shape:", df.shape)
+            st.write("df columns:", list(df.columns))
+            if "fiscal_period_raw" in df.columns:
+                st.write("fiscal_period raw unique:", sorted([str(x) for x in df["fiscal_period_raw"].dropna().unique().tolist()]))
+            if "fiscal_period_norm" in df.columns:
+                st.write("fiscal_period normalized unique:", sorted([str(x) for x in df["fiscal_period_norm"].dropna().unique().tolist()]))
+            if "metric" in df.columns:
+                st.write("metric unique:", sorted([str(x) for x in df["metric"].dropna().unique().tolist()]))
+            st.write("missing_data_summary:", meta.get("missing_data_summary", {}))
+            if not df.empty:
+                st.dataframe(df.head(10), use_container_width=True)
+
+    if dfg.empty:
+        st.info(f"No {granularity} periods found in extracted payload.")
+        if debug_mode and "fiscal_period_raw" in df.columns:
+            st.write("Available raw fiscal periods:", sorted([str(x) for x in df["fiscal_period_raw"].dropna().unique().tolist()]))
+        st.stop()
+
     period_options = []
-    if not dfg.empty:
-        periods = dfg[["period_end", "period_label"]].drop_duplicates().sort_values("period_end")
-        period_options = [(r.period_label, r.period_end) for r in periods.itertuples(index=False)]
+    periods = dfg[["period_end", "period_label"]].drop_duplicates().sort_values("period_end")
+    period_options = [(r.period_label, r.period_end) for r in periods.itertuples(index=False)]
 
     selected_period_end = period_options[-1][1] if period_options else None
     with card("KPI Overview"):
@@ -156,7 +299,12 @@ if "payload" in st.session_state:
         with cols[5]:
             metric_card("CAPEX Intensity", f"{cap_intensity:.1f}%" if cap_intensity is not None else "N/A")
 
-    figures = build_all_figures(df, meta, granularity=granularity, selected_period_end=selected_period_end)
+    try:
+        figures = build_all_figures(df, meta, granularity=granularity, selected_period_end=selected_period_end)
+    except Exception as e:
+        st.error("Build figures failed.")
+        st.exception(e)
+        st.stop()
 
     c_left, c_right = st.columns(2)
     with c_left:
